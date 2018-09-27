@@ -46,6 +46,8 @@ namespace DC_CrossLoad_Service
 
         private static int failJobFrequency;
 
+        private static int jobAgeToFail;
+
         public static void Main(string[] args)
         {
             var configBuilder = new ConfigurationBuilder()
@@ -54,6 +56,7 @@ namespace DC_CrossLoad_Service
 
             IConfiguration configuration = configBuilder.Build();
             failJobFrequency = GetConfigItemAsInt(configuration, "numberOfMinutesCheckFail", 60);
+            jobAgeToFail = GetConfigItemAsInt(configuration, "numberOfMinutesBeforeFail", 240);
 
             IQueueConfiguration queueConfiguration = new QueueConfiguration(configuration["queueConnectionString"], configuration["queueName"], 1);
             WebApiConfiguration webApiConfiguration = new WebApiConfiguration(configuration["jobSchedulerApiEndPoint"]);
@@ -91,7 +94,7 @@ namespace DC_CrossLoad_Service
                 options => options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(3), new List<int>()));
 
             crossLoadStatusService = new CrossLoadStatusService(webApiConfiguration);
-            crossLoadActiveJobService = new CrossLoadActiveJobService(optionsBuilder.Options, dateTimeProvider, GetConfigItemAsInt(configuration, "numberOfMinutesBeforeFail", 240));
+            crossLoadActiveJobService = new CrossLoadActiveJobService(optionsBuilder.Options, dateTimeProvider, jobAgeToFail);
 
             IQueueSubscriptionService<MessageCrossLoadDcftToDctDto> queueSubscriptionService = new QueueSubscriptionService<MessageCrossLoadDcftToDctDto>(queueConfiguration, serializationService, logger);
 
@@ -122,8 +125,9 @@ namespace DC_CrossLoad_Service
                         new MessageCrossLoadDcftToDctDto
                         {
                             JobId = failedJob.JobId,
+                            DcftJobId = "NA",
                             ErrorMessage =
-                                "Cross load job has been marked as failed as it has not changed state within the configured timeout"
+                                $"Cross load job has been marked as failed as it has not changed state within the configured timeout of {jobAgeToFail} minutes"
                         },
                         new Dictionary<string, object>(),
                         CancellationToken.None).Wait();
@@ -150,6 +154,8 @@ namespace DC_CrossLoad_Service
         {
             try
             {
+                logger.LogInfo($"Cross loading Job Id {message.JobId} is matched with DC Job Id of {message.DcftJobId}");
+
                 if (string.IsNullOrEmpty(message.ErrorMessage))
                 {
                     logger.LogInfo($"Cross loading successful for Job Id {message.JobId}");
@@ -170,6 +176,13 @@ namespace DC_CrossLoad_Service
             }
         }
 
+        /// <summary>
+        /// Returns a config item as an int, returns default value on error condition.
+        /// </summary>
+        /// <param name="configuration">Configuration object.</param>
+        /// <param name="configItem">The config item to read.</param>
+        /// <param name="def">The default value to use on error condition.</param>
+        /// <returns>The int value to use.</returns>
         private static int GetConfigItemAsInt(IConfiguration configuration, string configItem, int def)
         {
             try
