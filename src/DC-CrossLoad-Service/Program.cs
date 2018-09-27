@@ -111,6 +111,32 @@ namespace DC_CrossLoad_Service
         }
 
         /// <summary>
+        /// Returns a config item as an int, returns default value on error condition.
+        /// </summary>
+        /// <param name="configuration">Configuration object.</param>
+        /// <param name="configItem">The config item to read.</param>
+        /// <param name="def">The default value to use on error condition.</param>
+        /// <returns>The int value to use.</returns>
+        public static int GetConfigItemAsInt(IConfiguration configuration, string configItem, int def)
+        {
+            try
+            {
+                string val = configuration[configItem];
+                if (string.IsNullOrEmpty(val) || !int.TryParse(val, out var intVal))
+                {
+                    return def;
+                }
+
+                return intVal;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Failed to read {configItem} from config and convert to int, returning and using default {def}", ex);
+                return def;
+            }
+        }
+
+        /// <summary>
         /// Called by the timer to check if jobs have been stuck for too long, and if so, fail them.
         /// </summary>
         /// <param name="state">Not used.</param>
@@ -173,32 +199,6 @@ namespace DC_CrossLoad_Service
             {
                 logger.LogError($"Cross loading failed to post status update for Job Id {message.JobId}", ex);
                 return new QueueCallbackResult(false, ex);
-            }
-        }
-
-        /// <summary>
-        /// Returns a config item as an int, returns default value on error condition.
-        /// </summary>
-        /// <param name="configuration">Configuration object.</param>
-        /// <param name="configItem">The config item to read.</param>
-        /// <param name="def">The default value to use on error condition.</param>
-        /// <returns>The int value to use.</returns>
-        private static int GetConfigItemAsInt(IConfiguration configuration, string configItem, int def)
-        {
-            try
-            {
-                string val = configuration[configItem];
-                if (string.IsNullOrEmpty(val) || !int.TryParse(val, out var intVal))
-                {
-                    return def;
-                }
-
-                return intVal;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError($"Failed to read {configItem} from config and convert to int, returning and using default {def}", ex);
-                return def;
             }
         }
     }
