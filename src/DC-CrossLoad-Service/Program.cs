@@ -102,7 +102,7 @@ namespace DC_CrossLoad_Service
             queueSubscriptionService.Subscribe(Callback, CancellationToken.None);
 
             logger.LogInfo("Cross Loader service initialising crashed jobs timer");
-            timer = new Timer(FindCrashedJobs, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(Timeout.Infinite));
+            timer = new Timer(FindCrashedJobs, null, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(Timeout.Infinite));
 
             logger.LogInfo("Started Cross Loader Service!");
 
