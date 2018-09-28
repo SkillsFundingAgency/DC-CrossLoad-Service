@@ -93,7 +93,7 @@ namespace DC_CrossLoad_Service
                 configuration["jobQueueManagerConnectionString"],
                 options => options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(3), new List<int>()));
 
-            crossLoadStatusService = new CrossLoadStatusService(webApiConfiguration);
+            crossLoadStatusService = new CrossLoadStatusService(webApiConfiguration, logger);
             crossLoadActiveJobService = new CrossLoadActiveJobService(optionsBuilder.Options, dateTimeProvider, jobAgeToFail);
 
             IQueueSubscriptionService<MessageCrossLoadDcftToDctDto> queueSubscriptionService = new QueueSubscriptionService<MessageCrossLoadDcftToDctDto>(queueConfiguration, serializationService, logger);
