@@ -68,7 +68,7 @@ namespace DC_CrossLoad_Service
                 {
                     new MsSqlServerApplicationLoggerOutputSettings
                     {
-                        ConnectionString = configuration["loggerConnectionString"],
+                        ConnectionString = configuration["logConnectionString"],
                         MinimumLogLevel = LogLevel.Information
                     },
                     new ConsoleApplicationLoggerOutputSettings
