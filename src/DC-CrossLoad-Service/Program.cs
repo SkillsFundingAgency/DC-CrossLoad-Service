@@ -69,17 +69,17 @@ namespace DC_CrossLoad_Service
                     new MsSqlServerApplicationLoggerOutputSettings
                     {
                         ConnectionString = configuration["logConnectionString"],
-                        MinimumLogLevel = LogLevel.Information
+                        MinimumLogLevel = LogLevel.Debug
                     },
                     new ConsoleApplicationLoggerOutputSettings
                     {
-                        MinimumLogLevel = LogLevel.Information
+                        MinimumLogLevel = LogLevel.Debug
                     }
                 },
                 TaskKey = "Cross Loader",
                 EnableInternalLogs = true,
                 JobId = "Cross Loader Service",
-                MinimumLogLevel = LogLevel.Information
+                MinimumLogLevel = LogLevel.Debug
             };
             IExecutionContext executionContext = new ExecutionContext
             {
