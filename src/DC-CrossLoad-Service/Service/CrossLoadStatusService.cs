@@ -18,7 +18,7 @@ namespace DC_CrossLoad_Service.Service
         {
             _logger = logger;
             _endPointUrl = webApiConfiguration.EndPointUrl;
-            _endPointUrl = !_endPointUrl.EndsWith("/") ? $"{_endPointUrl}/cross-loading/status" : $"{_endPointUrl}cross-loading/status";
+            _endPointUrl = !_endPointUrl.EndsWith("/") ? $"{_endPointUrl}/job/cross-loading/status" : $"{_endPointUrl}job/cross-loading/status";
         }
 
         public async Task SendAsync(long jobId, JobStatusType jobStatusType, CancellationToken cancellationToken)
