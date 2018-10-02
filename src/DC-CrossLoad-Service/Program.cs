@@ -9,6 +9,8 @@ using DC_CrossLoad_Service.Service;
 using ESFA.DC.CrossLoad.Dto;
 using ESFA.DC.DateTimeProvider;
 using ESFA.DC.DateTimeProvider.Interface;
+using ESFA.DC.IO.AzureStorage;
+using ESFA.DC.IO.Interfaces;
 using ESFA.DC.Jobs.Model;
 using ESFA.DC.JobStatus.Interface;
 using ESFA.DC.Logging;
@@ -35,10 +37,15 @@ namespace DC_CrossLoad_Service
 #else
         private const string ConfigFile = "appsettings.json";
 #endif
+        private static Dictionary<string, IStreamableKeyValuePersistenceService> availableStreamers;
 
         private static ICrossLoadStatusService crossLoadStatusService;
 
         private static ICrossLoadActiveJobService crossLoadActiveJobService;
+
+        private static IMergeZipFilesService mergeZipFilesService;
+
+        private static IConfiguration configuration;
 
         private static ILogger logger;
 
@@ -54,12 +61,14 @@ namespace DC_CrossLoad_Service
                 .SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile(ConfigFile);
 
-            IConfiguration configuration = configBuilder.Build();
+            configuration = configBuilder.Build();
             failJobFrequency = GetConfigItemAsInt(configuration, "numberOfMinutesCheckFail", 60);
             jobAgeToFail = GetConfigItemAsInt(configuration, "numberOfMinutesBeforeFail", 240);
 
             IQueueConfiguration queueConfiguration = new QueueConfiguration(configuration["queueConnectionString"], configuration["queueName"], 1);
             WebApiConfiguration webApiConfiguration = new WebApiConfiguration(configuration["jobSchedulerApiEndPoint"]);
+            availableStreamers = new Dictionary<string, IStreamableKeyValuePersistenceService>();
+            mergeZipFilesService = new MergeZipFilesService();
             ISerializationService serializationService = new JsonSerializationService();
             IDateTimeProvider dateTimeProvider = new DateTimeProvider();
             IApplicationLoggerSettings applicationLoggerOutputSettings = new ApplicationLoggerSettings
@@ -186,6 +195,31 @@ namespace DC_CrossLoad_Service
                 {
                     logger.LogInfo($"Cross loading successful for Job Id {message.JobId}");
                     await crossLoadStatusService.SendAsync(message.JobId, JobStatusType.Completed, cancellationToken);
+
+                    if (string.IsNullOrEmpty(message.StorageContainerName))
+                    {
+                        logger.LogWarning($"Cross loading can't find storage container name for Job Id {message.JobId}");
+                    }
+                    else
+                    {
+                        if (!availableStreamers.ContainsKey(message.StorageContainerName))
+                        {
+                            availableStreamers[message.StorageContainerName] =
+                                new AzureStorageKeyValuePersistenceService(
+                                    new StorageConfiguration(
+                                        configuration["azureBlobConnectionString"],
+                                        message.StorageContainerName));
+                        }
+
+                        logger.LogInfo($"Cross loading is merging reports {message.StorageFileNameReport1} and {message.StorageFileNameReport2} for Job Id {message.JobId}");
+                        await mergeZipFilesService.Merge(
+                            message.JobId,
+                            message.StorageFileNameReport1,
+                            message.StorageFileNameReport2,
+                            availableStreamers[message.StorageContainerName],
+                            logger,
+                            cancellationToken);
+                    }
                 }
                 else
                 {

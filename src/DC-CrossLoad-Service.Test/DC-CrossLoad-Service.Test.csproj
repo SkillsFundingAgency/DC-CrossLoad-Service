@@ -34,4 +34,13 @@
     <ProjectReference Include="..\DC-CrossLoad-Service\DC-CrossLoad-Service.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="File_A.zip">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="File_B.zip">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
