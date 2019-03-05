@@ -9,6 +9,8 @@ using DC_CrossLoad_Service.Service;
 using ESFA.DC.CrossLoad.Dto;
 using ESFA.DC.DateTimeProvider;
 using ESFA.DC.DateTimeProvider.Interface;
+using ESFA.DC.IO.AzureStorage;
+using ESFA.DC.IO.Interfaces;
 using ESFA.DC.Jobs.Model;
 using ESFA.DC.JobStatus.Interface;
 using ESFA.DC.Logging;
@@ -35,10 +37,15 @@ namespace DC_CrossLoad_Service
 #else
         private const string ConfigFile = "appsettings.json";
 #endif
+        private static Dictionary<string, IStreamableKeyValuePersistenceService> availableStreamers;
 
         private static ICrossLoadStatusService crossLoadStatusService;
 
         private static ICrossLoadActiveJobService crossLoadActiveJobService;
+
+        private static IMergeZipFilesService mergeZipFilesService;
+
+        private static IConfiguration configuration;
 
         private static ILogger logger;
 
@@ -46,17 +53,22 @@ namespace DC_CrossLoad_Service
 
         private static int failJobFrequency;
 
+        private static int jobAgeToFail;
+
         public static void Main(string[] args)
         {
             var configBuilder = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile(ConfigFile);
 
-            IConfiguration configuration = configBuilder.Build();
+            configuration = configBuilder.Build();
             failJobFrequency = GetConfigItemAsInt(configuration, "numberOfMinutesCheckFail", 60);
+            jobAgeToFail = GetConfigItemAsInt(configuration, "numberOfMinutesBeforeFail", 240);
 
             IQueueConfiguration queueConfiguration = new QueueConfiguration(configuration["queueConnectionString"], configuration["queueName"], 1);
             WebApiConfiguration webApiConfiguration = new WebApiConfiguration(configuration["jobSchedulerApiEndPoint"]);
+            availableStreamers = new Dictionary<string, IStreamableKeyValuePersistenceService>();
+            mergeZipFilesService = new MergeZipFilesService();
             ISerializationService serializationService = new JsonSerializationService();
             IDateTimeProvider dateTimeProvider = new DateTimeProvider();
             IApplicationLoggerSettings applicationLoggerOutputSettings = new ApplicationLoggerSettings
@@ -65,18 +77,18 @@ namespace DC_CrossLoad_Service
                 {
                     new MsSqlServerApplicationLoggerOutputSettings
                     {
-                        ConnectionString = configuration["loggerConnectionString"],
-                        MinimumLogLevel = LogLevel.Information
+                        ConnectionString = configuration["logConnectionString"],
+                        MinimumLogLevel = LogLevel.Debug
                     },
                     new ConsoleApplicationLoggerOutputSettings
                     {
-                        MinimumLogLevel = LogLevel.Information
+                        MinimumLogLevel = LogLevel.Debug
                     }
                 },
                 TaskKey = "Cross Loader",
                 EnableInternalLogs = true,
                 JobId = "Cross Loader Service",
-                MinimumLogLevel = LogLevel.Information
+                MinimumLogLevel = LogLevel.Debug
             };
             IExecutionContext executionContext = new ExecutionContext
             {
@@ -90,8 +102,8 @@ namespace DC_CrossLoad_Service
                 configuration["jobQueueManagerConnectionString"],
                 options => options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(3), new List<int>()));
 
-            crossLoadStatusService = new CrossLoadStatusService(webApiConfiguration);
-            crossLoadActiveJobService = new CrossLoadActiveJobService(optionsBuilder.Options, dateTimeProvider, GetConfigItemAsInt(configuration, "numberOfMinutesBeforeFail", 240));
+            crossLoadStatusService = new CrossLoadStatusService(webApiConfiguration, logger);
+            crossLoadActiveJobService = new CrossLoadActiveJobService(optionsBuilder.Options, dateTimeProvider, jobAgeToFail);
 
             IQueueSubscriptionService<MessageCrossLoadDcftToDctDto> queueSubscriptionService = new QueueSubscriptionService<MessageCrossLoadDcftToDctDto>(queueConfiguration, serializationService, logger);
 
@@ -99,12 +111,38 @@ namespace DC_CrossLoad_Service
             queueSubscriptionService.Subscribe(Callback, CancellationToken.None);
 
             logger.LogInfo("Cross Loader service initialising crashed jobs timer");
-            timer = new Timer(FindCrashedJobs, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(Timeout.Infinite));
+            timer = new Timer(FindCrashedJobs, null, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(Timeout.Infinite));
 
             logger.LogInfo("Started Cross Loader Service!");
 
             ManualResetEvent oSignalEvent = new ManualResetEvent(false);
             oSignalEvent.WaitOne();
+        }
+
+        /// <summary>
+        /// Returns a config item as an int, returns default value on error condition.
+        /// </summary>
+        /// <param name="configuration">Configuration object.</param>
+        /// <param name="configItem">The config item to read.</param>
+        /// <param name="def">The default value to use on error condition.</param>
+        /// <returns>The int value to use.</returns>
+        public static int GetConfigItemAsInt(IConfiguration configuration, string configItem, int def)
+        {
+            try
+            {
+                string val = configuration[configItem];
+                if (string.IsNullOrEmpty(val) || !int.TryParse(val, out var intVal))
+                {
+                    return def;
+                }
+
+                return intVal;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Failed to read {configItem} from config and convert to int, returning and using default {def}", ex);
+                return def;
+            }
         }
 
         /// <summary>
@@ -122,8 +160,9 @@ namespace DC_CrossLoad_Service
                         new MessageCrossLoadDcftToDctDto
                         {
                             JobId = failedJob.JobId,
+                            DcftJobId = "NA",
                             ErrorMessage =
-                                "Cross load job has been marked as failed as it has not changed state within the configured timeout"
+                                $"Cross load job has been marked as failed as it has not changed state within the configured timeout of {jobAgeToFail} minutes"
                         },
                         new Dictionary<string, object>(),
                         CancellationToken.None).Wait();
@@ -150,10 +189,37 @@ namespace DC_CrossLoad_Service
         {
             try
             {
+                logger.LogInfo($"Cross loading Job Id {message.JobId} is matched with DC Job Id of {message.DcftJobId}");
+
                 if (string.IsNullOrEmpty(message.ErrorMessage))
                 {
                     logger.LogInfo($"Cross loading successful for Job Id {message.JobId}");
                     await crossLoadStatusService.SendAsync(message.JobId, JobStatusType.Completed, cancellationToken);
+
+                    if (string.IsNullOrEmpty(message.StorageContainerName))
+                    {
+                        logger.LogWarning($"Cross loading can't find storage container name for Job Id {message.JobId}");
+                    }
+                    else
+                    {
+                        if (!availableStreamers.ContainsKey(message.StorageContainerName))
+                        {
+                            availableStreamers[message.StorageContainerName] =
+                                new AzureStorageKeyValuePersistenceService(
+                                    new StorageConfiguration(
+                                        configuration["azureBlobConnectionString"],
+                                        message.StorageContainerName));
+                        }
+
+                        logger.LogInfo($"Cross loading is merging reports {message.StorageFileNameReport1} and {message.StorageFileNameReport2} for Job Id {message.JobId}");
+                        await mergeZipFilesService.Merge(
+                            message.JobId,
+                            message.StorageFileNameReport1,
+                            message.StorageFileNameReport2,
+                            availableStreamers[message.StorageContainerName],
+                            logger,
+                            cancellationToken);
+                    }
                 }
                 else
                 {
@@ -167,25 +233,6 @@ namespace DC_CrossLoad_Service
             {
                 logger.LogError($"Cross loading failed to post status update for Job Id {message.JobId}", ex);
                 return new QueueCallbackResult(false, ex);
-            }
-        }
-
-        private static int GetConfigItemAsInt(IConfiguration configuration, string configItem, int def)
-        {
-            try
-            {
-                string val = configuration[configItem];
-                if (string.IsNullOrEmpty(val) || !int.TryParse(val, out var intVal))
-                {
-                    return def;
-                }
-
-                return intVal;
-            }
-            catch (Exception ex)
-            {
-                logger.LogError($"Failed to read {configItem} from config and convert to int, returning and using default {def}", ex);
-                return def;
             }
         }
     }
